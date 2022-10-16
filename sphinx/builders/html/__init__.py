@@ -229,8 +229,11 @@ class StandaloneHTMLBuilder(Builder):
             source_class=DocTreeInput,
             destination=StringOutput(encoding='unicode'),
         )
-        op = pub.setup_option_parser(output_encoding='unicode', traceback=True)
-        pub.settings = op.get_default_values()
+        if docutils.__version_info__[:2] >= (0, 19):
+            pub.get_settings(output_encoding='unicode', traceback=True)
+        else:
+            op = pub.setup_option_parser(output_encoding='unicode', traceback=True)
+            pub.settings = op.get_default_values()
         self._publisher = pub
 
     def init(self) -> None:
@@ -276,13 +279,16 @@ class StandaloneHTMLBuilder(Builder):
                 return jsfile
         return None
 
-    def _get_style_filename(self) -> str:
-        if self.config.html_style is not None:
-            return self.config.html_style
+    def _get_style_filenames(self) -> Iterator[str]:
+        if isinstance(self.config.html_style, str):
+            yield self.config.html_style
+        elif self.config.html_style is not None:
+            yield from self.config.html_style
         elif self.theme:
-            return self.theme.get_config('theme', 'stylesheet')
+            stylesheet = self.theme.get_config('theme', 'stylesheet')
+            yield from map(str.strip, stylesheet.split(','))
         else:
-            return 'default.css'
+            yield 'default.css'
 
     def get_theme_config(self) -> Tuple[str, Dict]:
         return self.config.html_theme, self.config.html_theme_options
@@ -321,7 +327,9 @@ class StandaloneHTMLBuilder(Builder):
     def init_css_files(self) -> None:
         self.css_files = []
         self.add_css_file('pygments.css', priority=200)
-        self.add_css_file(self._get_style_filename(), priority=200)
+
+        for filename in self._get_style_filenames():
+            self.add_css_file(filename, priority=200)
 
         for filename, attrs in self.app.registry.css_files:
             self.add_css_file(filename, **attrs)
@@ -346,6 +354,7 @@ class StandaloneHTMLBuilder(Builder):
         self.add_js_file('underscore.js', priority=200)
         self.add_js_file('_sphinx_javascript_frameworks_compat.js', priority=200)
         self.add_js_file('doctools.js', priority=200)
+        self.add_js_file('sphinx_highlight.js', priority=200)
 
         for filename, attrs in self.app.registry.js_files:
             self.add_js_file(filename, **attrs)
@@ -366,7 +375,7 @@ class StandaloneHTMLBuilder(Builder):
     @property
     def default_translator_class(self) -> Type[nodes.NodeVisitor]:  # type: ignore
         if self.config.html4_writer:
-            return HTMLTranslator
+            return HTMLTranslator  # RemovedInSphinx70Warning
         else:
             return HTML5Translator
 
@@ -439,7 +448,7 @@ class StandaloneHTMLBuilder(Builder):
     def get_asset_paths(self) -> List[str]:
         return self.config.html_extra_path + self.config.html_static_path
 
-    def render_partial(self, node: Node) -> Dict[str, str]:
+    def render_partial(self, node: Optional[Node]) -> Dict[str, str]:
         """Utility: Render a lone doctree node."""
         if node is None:
             return {'fragment': ''}
@@ -522,6 +531,7 @@ class StandaloneHTMLBuilder(Builder):
         # back up script_files and css_files to allow adding JS/CSS files to a specific page.
         self._script_files = list(self.script_files)
         self._css_files = list(self.css_files)
+        styles = list(self._get_style_filenames())
 
         self.globalcontext = {
             'embedded': self.embedded,
@@ -549,7 +559,8 @@ class StandaloneHTMLBuilder(Builder):
             'sphinx_version': __display_version__,
             'sphinx_version_tuple': sphinx_version,
             'docutils_version_info': docutils.__version_info__[:5],
-            'style': self._get_style_filename(),
+            'styles': styles,
+            'style': styles[-1],  # xref RemovedInSphinx70Warning
             'rellinks': rellinks,
             'builder': self.name,
             'parents': [],
@@ -813,7 +824,7 @@ class StandaloneHTMLBuilder(Builder):
                 if jsfile:
                     copyfile(jsfile, path.join(self.outdir, '_static', '_stemmer.js'))
 
-    def copy_theme_static_files(self, context: Dict) -> None:
+    def copy_theme_static_files(self, context: Dict[str, Any]) -> None:
         def onerror(filename: str, error: Exception) -> None:
             logger.warning(__('Failed to copy a file in html_static_file: %s: %r'),
                            filename, error)
@@ -1013,7 +1024,7 @@ class StandaloneHTMLBuilder(Builder):
         return quote(docname) + self.link_suffix
 
     def handle_page(self, pagename: str, addctx: Dict, templatename: str = 'page.html',
-                    outfilename: str = None, event_arg: Any = None) -> None:
+                    outfilename: Optional[str] = None, event_arg: Any = None) -> None:
         ctx = self.globalcontext.copy()
         # current_page_name is backwards compatibility
         ctx['pagename'] = ctx['current_page_name'] = pagename
@@ -1328,6 +1339,16 @@ def migrate_html_add_permalinks(app: Sphinx, config: Config) -> None:
         html_add_permalinks
     )
 
+
+def deprecate_html_4(_app: Sphinx, config: Config) -> None:
+    """Warn on HTML 4."""
+    # RemovedInSphinx70Warning
+    if config.html4_writer:
+        logger.warning(_('Support for emitting HTML 4 output is deprecated and '
+                         'will be removed in Sphinx 7. ("html4_writer=True '
+                         'detected in configuration options)'))
+
+
 # for compatibility
 import sphinxcontrib.serializinghtml  # NOQA
 
@@ -1353,7 +1374,7 @@ def setup(app: Sphinx) -> Dict[str, Any]:
                          lambda self: _('%s %s documentation') % (self.project, self.release),
                          'html', [str])
     app.add_config_value('html_short_title', lambda self: self.html_title, 'html')
-    app.add_config_value('html_style', None, 'html', [str])
+    app.add_config_value('html_style', None, 'html', [list, str])
     app.add_config_value('html_logo', None, 'html', [str])
     app.add_config_value('html_favicon', None, 'html', [str])
     app.add_config_value('html_css_files', [], 'html')
@@ -1404,6 +1425,7 @@ def setup(app: Sphinx) -> Dict[str, Any]:
     app.connect('config-inited', validate_html_static_path, priority=800)
     app.connect('config-inited', validate_html_logo, priority=800)
     app.connect('config-inited', validate_html_favicon, priority=800)
+    app.connect('config-inited', deprecate_html_4, priority=800)
     app.connect('builder-inited', validate_math_renderer)
     app.connect('html-page-context', setup_css_tag_helper)
     app.connect('html-page-context', setup_js_tag_helper)

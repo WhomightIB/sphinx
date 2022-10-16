@@ -9,8 +9,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 try:
     import multiprocessing
+    HAS_MULTIPROCESSING = True
 except ImportError:
-    multiprocessing = None
+    HAS_MULTIPROCESSING = False
 
 from sphinx.errors import SphinxParallelError
 from sphinx.util import logging
@@ -18,10 +19,11 @@ from sphinx.util import logging
 logger = logging.getLogger(__name__)
 
 if sys.platform != "win32":
+    ForkContext = multiprocessing.context.ForkContext
     ForkProcess = multiprocessing.context.ForkProcess
 else:
     # For static typing, as ForkProcess doesn't exist on Windows
-    ForkProcess = multiprocessing.process.BaseProcess
+    ForkContext = ForkProcess = Any
 
 # our parallel functionality only works for the forking Process
 parallel_available = multiprocessing and os.name == 'posix'
@@ -33,7 +35,9 @@ class SerialTasks:
     def __init__(self, nproc: int = 1) -> None:
         pass
 
-    def add_task(self, task_func: Callable, arg: Any = None, result_func: Callable = None) -> None:  # NOQA
+    def add_task(
+        self, task_func: Callable, arg: Any = None, result_func: Optional[Callable] = None
+    ) -> None:
         if arg is not None:
             res = task_func(arg)
         else:
@@ -81,13 +85,15 @@ class ParallelTasks:
         logging.convert_serializable(collector.logs)
         pipe.send((failed, collector.logs, ret))
 
-    def add_task(self, task_func: Callable, arg: Any = None, result_func: Callable = None) -> None:  # NOQA
+    def add_task(
+        self, task_func: Callable, arg: Any = None, result_func: Optional[Callable] = None
+    ) -> None:
         tid = self._taskid
         self._taskid += 1
         self._result_funcs[tid] = result_func or (lambda arg, result: None)
         self._args[tid] = arg
         precv, psend = multiprocessing.Pipe(False)
-        context = multiprocessing.get_context('fork')
+        context: ForkContext = multiprocessing.get_context('fork')
         proc = context.Process(target=self._process, args=(psend, task_func, arg))
         self._procs[tid] = proc
         self._precvsWaiting[tid] = precv
