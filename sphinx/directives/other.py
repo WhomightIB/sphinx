@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, cast
 
 from docutils import nodes
 from docutils.parsers.rst import directives
-from docutils.parsers.rst.directives.admonitions import BaseAdmonition
 from docutils.parsers.rst.directives.misc import Class
 from docutils.parsers.rst.directives.misc import Include as BaseInclude
 from docutils.statemachine import StateMachine
@@ -158,7 +157,7 @@ class TocTree(SphinxDirective):
                     subtype = 'not_readable'
 
                 logger.warning(
-                    msg, docname, type='toc', subtype=subtype, location=toctree
+                    msg, docname, location=toctree, type='toc', subtype=subtype
                 )
                 self.env.note_reread()
                 continue
@@ -170,6 +169,8 @@ class TocTree(SphinxDirective):
                     __('duplicated entry found in toctree: %s'),
                     docname,
                     location=toctree,
+                    type='toc',
+                    subtype='duplicate_entry',
                 )
 
             toctree['entries'].append((title, docname))
@@ -213,12 +214,6 @@ class Author(SphinxDirective):
         ret: list[Node] = [para]
         ret += messages
         return ret
-
-
-class SeeAlso(BaseAdmonition):
-    """An admonition mentioning things to look at as reference."""
-
-    node_class = addnodes.seealso
 
 
 class TabularColumns(SphinxDirective):
@@ -427,7 +422,6 @@ def setup(app: Sphinx) -> ExtensionMetadata:
     directives.register_directive('sectionauthor', Author)
     directives.register_directive('moduleauthor', Author)
     directives.register_directive('codeauthor', Author)
-    directives.register_directive('seealso', SeeAlso)
     directives.register_directive('tabularcolumns', TabularColumns)
     directives.register_directive('centered', Centered)
     directives.register_directive('acks', Acks)
